@@ -1,12 +1,15 @@
 from __future__ import print_function
 import os
 import argparse
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torchvision
 from torchvision import datasets, transforms
 from torch.autograd import Variable
 import torch.utils.data.distributed
+from tensorboardX import SummaryWriter
 import engineml.torch as eml
 
 # Training settings
@@ -35,7 +38,6 @@ class Net(nn.Module):
   """
   A simple CNN in pytorch
   """
-  
   def __init__(self):
     super(Net, self).__init__()
     self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
@@ -96,7 +98,7 @@ def set_checkpoint_dir(test_replica_weights):
   # Set the output directory for saving event files and checkpoints
   # `eml.data.output_dir()` returns `None` when running locally
   checkpoint_dir = eml.data.output_dir() or './checkpoints'
-
+  
   # If replica weight test, set manually.
   # THIS IS ONLY FOR TESTING! THERE IS NO REASON TO WRITE MULTIPLE CHECKPOINTS FOR EACH REPLICA.
   # MODEL WEIGHTS ARE UPDATED USING AVG. GRADIENTS ACROSS ALL REPLICAS; THEREFORE EVERY CHECKPOINT WOULD BE IDENTICAL.
@@ -152,7 +154,8 @@ def create_data_loaders(train_batch_size, test_batch_size):
   return train_loader, train_sampler, test_loader
 
 
-def train(model, optimizer, train_sampler, train_loader, epoch, use_cuda, checkpoint_dir, log_interval):
+def train(model, optimizer, train_sampler, train_loader, start_epoch, epochs, use_cuda, checkpoint_dir, log_interval,
+          writer):
   """
   Train model
 
@@ -160,32 +163,49 @@ def train(model, optimizer, train_sampler, train_loader, epoch, use_cuda, checkp
   :param optimizer: initialized optimizer
   :param train_sampler: sampler to use to shard data across replicas
   :param train_loader: loader for training data
-  :param epoch: current epoch of training
+  :param start_epoch: if resuming training from checkpoint, which epoch to start from
+  :param epochs: number of epoch to train
   :param use_cuda: boolean if training on GPU
   :param checkpoint_dir: save path for checkpoints
   :param log_interval: int for how often to print train loss
+  :param writer: TensorBoardX Summary Writer
   """
-  model.train()
-  train_sampler.set_epoch(epoch)
-  for batch_idx, (data, target) in enumerate(train_loader):
-    if use_cuda:
-      data, target = data.cuda(), target.cuda()
-    data, target = Variable(data), Variable(target)
-    optimizer.zero_grad()
-    output = model(data)
-    loss = F.nll_loss(output, target)
-    loss.backward()
-    optimizer.step()
-    if batch_idx % log_interval == 0:
-      print('Train Epoch: {}\tLoss: {:.6f}'.format(
-        epoch, loss.item()))
-  state = {
-    "epoch": epoch,
-    "model_state": model.state_dict(),
-    "optimizer_state": optimizer.state_dict(),
-  }
-  torch.save(state, os.path.join(checkpoint_dir, 'checkpoint.pt'))
-  print("Model Saved at {}!".format(checkpoint_dir))
+  batch_num = 0
+  for epoch in range(epochs):
+    model.train()
+    train_sampler.set_epoch(epoch)
+    for batch_idx, (data, target) in enumerate(train_loader):
+      if use_cuda:
+        data, target = data.cuda(), target.cuda()
+      data, target = Variable(data), Variable(target)
+      optimizer.zero_grad()
+      output = model(data)
+      loss = F.nll_loss(output, target)
+      loss.backward()
+      optimizer.step()
+      batch_num += 1
+      
+      if batch_idx % log_interval == 0:
+        print('Train Epoch: {}\tLoss: {:.6f}'.format((start_epoch + epoch), loss))
+        
+        # Write grid of 64 training images to TensorBoardX
+        img_grid = torchvision.utils.make_grid(data, nrow=8, normalize=True, scale_each=True)
+        writer.add_image('Images', img_grid, batch_num)
+        
+        # Write loss and histogram of weights to Tensorboard
+        writer.add_scalar('train_loss', loss, batch_num)
+        for name, param in model.named_parameters():
+          if param.requires_grad:
+            writer.add_histogram(name, param.clone().cpu().data.numpy().reshape(-1), batch_num)
+    
+    state = {
+      "epoch": epoch,
+      "model_state": model.state_dict(),
+      "optimizer_state": optimizer.state_dict(),
+    }
+    torch.save(state, os.path.join(checkpoint_dir, 'checkpoint.pt'))
+    print("Model Saved at {}!\n".format(checkpoint_dir))
+  print("Model finished training!")
 
 
 def test(model, test_loader, use_cuda):
@@ -216,6 +236,11 @@ def test(model, test_loader, use_cuda):
 
 
 def main(args):
+  # Create Summary Writer for TensorBoardX.
+  # log_dir needs to be set to eml.data.output_dir(). If training locally eml.data.output_dir() returns None.
+  writer_dir = eml.data.output_dir() or './logs'
+  writer = SummaryWriter(log_dir=writer_dir)
+  
   # Download data if necessary and create train and test data loaders
   train_loader, train_sampler, test_loader = create_data_loaders(args.batch_size, args.test_batch_size)
   
@@ -239,11 +264,14 @@ def main(args):
     optimizer.load_state_dict(checkpoint["optimizer_state"])
     start_epoch = checkpoint["epoch"]
   
-  # Train model, validating against test set after every epoch
-  for epoch in range(start_epoch + 1, start_epoch + args.epochs + 1):
-    train(model, optimizer, train_sampler, train_loader, epoch, args.cuda, checkpoint_dir, args.log_interval)
-    test(model, test_loader, args.cuda)
-  print("Model finished training!")
+  # Train model
+  train(model, optimizer, train_sampler, train_loader, start_epoch, args.epochs, args.cuda, checkpoint_dir,
+        args.log_interval, writer)
+  # Validate against test set
+  test(model, test_loader, args.cuda)
+  
+  # Close TensorBoardX Summary Writer
+  writer.close()
   
   # Run weight replica tests if flag is set
   if args.test_replica_weights:

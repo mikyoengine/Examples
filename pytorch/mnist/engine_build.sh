@@ -2,6 +2,6 @@
 
 set -e
 
-pip install torchvision
+pip install -r pytorch/mnist/requirements.txt
 
 echo "Starting Engines..."
