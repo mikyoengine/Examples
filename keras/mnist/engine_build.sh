@@ -2,6 +2,6 @@
 
 set -e
 
-pip install keras==2.2.2
+pip install -r keras/mnist/requirements.txt
 
 echo "Starting engines..."

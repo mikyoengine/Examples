@@ -17,19 +17,10 @@ build: engine_build.sh
 enableHighCostInstances: false
 
 # S3 bucket where the training data is stored.
-# If your data is hosted with Engine ML, Please contact us for the s3 bucket name
-dataBucket: imagenet.engineml.com
+dataBucket: datasets.engineml.com
 
 # Subdirectory of the S3 bucket containing tfrecords
-dataBucketSubdirectory: /VOC2012/VOC2012
-
-# Input directory for restoring from checkpoints
-# Either set jobId OR bucket and bucketPath, but not both.
-# From your code, you can get the directory where the data is mounted with `eml.data.input_dir()`
-#inputDir:
-  #jobId: train0000013cc556fe0d09c2168fdd41536945825
-  #bucket: test.us-west-2.customer-data.engineml.com
-  #bucketPath: /checkpoints/train000000195f846f0d7f389518e9f1533941940
+dataBucketSubdirectory: /mnist
 
 # The command to run
 commands:
