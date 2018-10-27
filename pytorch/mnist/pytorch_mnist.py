@@ -10,7 +10,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
-import torchvision
 from PIL import Image
 from tensorboardX import SummaryWriter
 from torch.autograd import Variable
@@ -200,9 +199,8 @@ def train(model, optimizer, train_loader, start_epoch, epochs, checkpoint_dir, w
       if batch_idx % 10 == 0:
         print('Train Epoch: {}\tLoss: {:.6f}'.format((start_epoch + epoch), loss))
 
-        # Write grid of 64 training images to TensorBoardX
-        img_grid = torchvision.utils.make_grid(data, nrow=8, normalize=True, scale_each=True)
-        writer.add_image('Images', img_grid, batch_num)
+        # Write an image to TensorBoardX
+        writer.add_image('Images', data[0], batch_num)
 
         # Write loss and histogram of weights to Tensorboard
         writer.add_scalar('train_loss', loss, batch_num)
