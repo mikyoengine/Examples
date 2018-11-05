@@ -23,8 +23,10 @@ parser.add_argument('--epochs', type=int, default=2, metavar='N_EPOCHS',
                     help='number of epochs to train (default: 2)')
 parser.add_argument('--data-dir', type=str, default='/engine/data', metavar='DATA_DIR',
                     help='path to data directory')
-parser.add_argument('--test-replica-weights', type=bool, default=False, metavar='BOOL',
+parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
+parser.add_argument('--run-on-subset', action='store_true',
+                    help='run on a subset of the data')
 
 
 class DataGenerator(keras.utils.Sequence):
@@ -97,15 +99,21 @@ def build_conv_model(input_shape=(28, 28, 1), num_classes=10):
   return model
 
 
-def get_data_generators(data_dir, batch_size):
+def get_data_generators(data_dir, batch_size, run_on_subset):
   """Convert class vectors to binary class matrices
 
   :param data_dir: path to data directory
   :param batch_size: int, batch_size
+  :param run_on_subset: boolean whether running replica weight test
   :return: image train_generator, image test_generator
   """
-  df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))
-  df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
+  # If running integration tests, only use a subset of the data
+  if run_on_subset:
+    df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))[:5000]
+    df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))[:500]
+  else:
+    df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))
+    df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
 
   # Partition your training data across replicas
   df_train = eml.data.distribute(df_train)
@@ -171,7 +179,7 @@ def main(args):
   config = eml.session.distribute_config(config)
   K.set_session(tf.Session(config=config))
 
-  train_generator, test_generator = get_data_generators(args.data_dir, args.batch_size)
+  train_generator, test_generator = get_data_generators(args.data_dir, args.batch_size, args.run_on_subset)
 
   model = build_conv_model()
 

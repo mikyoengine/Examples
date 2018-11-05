@@ -24,14 +24,16 @@ from tensorflow.contrib import layers
 
 # Training settings
 parser = argparse.ArgumentParser(description='TensorFlow MNIST Example')
-parser.add_argument('--test-replica-weights', type=bool, default=False, metavar='BOOL',
-                    help='test that weights are identical across all GPU devices')
-parser.add_argument('--epochs', type=int, default=3, metavar='N_EPOCHS',
-                    help='number of epochs to train (default: 5)')
-parser.add_argument('--batch-size', type=int, default=16, metavar='N_SAMPLES',
+parser.add_argument('--epochs', type=int, default=2, metavar='N_EPOCHS',
+                    help='number of epochs to train (default: 2)')
+parser.add_argument('--batch-size', type=int, default=64, metavar='N_SAMPLES',
                     help='input batch size for training (default: 64)')
-parser.add_argument('--data-dir', type=str, default='/engine/data/', metavar='DATA_DIR',
+parser.add_argument('--data-dir', type=str, default='/engine/data', metavar='DATA_DIR',
                     help='path to data directory')
+parser.add_argument('--test-replica-weights', action='store_true',
+                    help='test that weights are identical across all GPU devices')
+parser.add_argument('--run-on-subset', action='store_true',
+                    help='run on a subset of the data')
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -151,7 +153,11 @@ def set_checkpoint_dir(test_replica_weights):
 
 def main(_):
   # Create dataframe with train paths and labels
-  df = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))
+  # If running integration tests, only use a subset of the data
+  if args.run_on_subset:
+    df = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))[:5000]
+  else:
+    df = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))
   # Partition the training data across replicas
   df = eml.data.distribute(df)
   # Reset indices to start from 0 for sliced data frame

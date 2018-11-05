@@ -19,14 +19,16 @@ from torch.utils.data import Dataset
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
 parser.add_argument('--batch-size', type=int, default=64, metavar='N_SAMPLES',
                     help='input batch size for training (default: 64)')
-parser.add_argument('--data-dir', type=str, default='/engine/data/', metavar='DATA_DIR',
+parser.add_argument('--data-dir', type=str, default='/engine/data', metavar='DATA_DIR',
                     help='path to data directory')
 parser.add_argument('--epochs', type=int, default=2, metavar='N_EPOCHS',
-                    help='number of epochs to train (default: 5)')
+                    help='number of epochs to train (default: 2)')
 parser.add_argument('--restore-dir', type=str, default=None, metavar='RESTORE_DIR',
                     help='directory where saved checkpoint is stored')
-parser.add_argument('--test-replica-weights', type=bool, default=False,
+parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
+parser.add_argument('--run-on-subset', action='store_true',
+                    help='run on a subset of the data')
 
 
 class DataGenerator(Dataset):
@@ -72,13 +74,21 @@ def collate_fn(data):
   return torch.tensor(inputs), torch.tensor(targets)
 
 
-def create_data_loaders(data_dir, batch_size):
+def create_data_loaders(data_dir, batch_size, run_on_subset):
   """Create data loaders for train and test sets
 
+  :param data_dir: path to data directory
+  :param batch_size: int, batch_size
+  :param run_on_subset: boolean whether running replica weight test
   :return: train_loader, test_loader
   """
-  df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))
-  df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
+  # If running integration tests, only use a subset of the data
+  if run_on_subset:
+    df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))[:5000]
+    df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))[:500]
+  else:
+    df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))
+    df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
 
   # Partition your training and test data across replicas
   df_train = eml.data.distribute(df_train)
@@ -113,6 +123,7 @@ class Net(nn.Module):
     self.conv2_drop = nn.Dropout2d()
     self.fc1 = nn.Linear(320, 50)
     self.fc2 = nn.Linear(50, 10)
+
 
   def forward(self, x):
     x = F.relu(F.max_pool2d(self.conv1(x), 2))
@@ -252,7 +263,7 @@ def main(args):
   writer = SummaryWriter(log_dir=writer_dir)
 
   # Download data if necessary and create train and test data loaders
-  train_loader, test_loader = create_data_loaders(args.data_dir, args.batch_size)
+  train_loader, test_loader = create_data_loaders(args.data_dir, args.batch_size, args.run_on_subset)
 
   # Build model and optimizer
   model, optimizer = build_model()
