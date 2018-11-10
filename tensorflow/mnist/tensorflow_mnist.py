@@ -16,6 +16,7 @@
 # !/usr/bin/env python
 import argparse
 import os
+import time
 
 import engineml.tensorflow as eml
 import pandas as pd
@@ -151,6 +152,27 @@ def set_checkpoint_dir(test_replica_weights):
   return checkpoint_dir, log_dir
 
 
+def wait_for_files(num_retries=10, delay_secs=5):
+  """Wait for files to be written
+
+  :param num_retries: number of retries before raising error
+  :param delay_secs: delay time between retries
+  :return: path to checkpoint a, path to checkpoint b
+  """
+  try:
+    a = tf.train.latest_checkpoint('/engine/outputs/0')
+    b = tf.train.latest_checkpoint('/engine/outputs/1')
+    assert a is not None and b is not None, 'Missing checkpoints for some replicas!'
+    assert a.split('/')[-1] == b.split('/')[-1], 'Checkpoints are from different iterations!'
+    return a, b
+  except AssertionError as e:
+    if num_retries > 0:
+      time.sleep(delay_secs)
+      return wait_for_files(num_retries - 1, delay_secs)
+    else:
+      raise e
+
+
 def main(_):
   # Create dataframe with train paths and labels
   # If running integration tests, only use a subset of the data
@@ -209,8 +231,10 @@ def main(_):
         writer.add_summary(batch_summaries, batch_cnt)
 
   if args.test_replica_weights:
-    a = tf.train.latest_checkpoint('/engine/outputs/0')
-    b = tf.train.latest_checkpoint('/engine/outputs/1')
+    # Sometimes replica 0 will reach the test_replica_weights phase before the other replicas have finished writing
+    # the checkpoint file, causing an assertion error because checkpoints from different steps are loaded.
+    # wait_for_files ensures that both checkpoints are ready to be accessed before comparing the weights.
+    a, b = wait_for_files(num_retries=10, delay_secs=5)
     assert eml.compare_checkpoints(a, b), 'Weights do not match across replicas!'
 
 
