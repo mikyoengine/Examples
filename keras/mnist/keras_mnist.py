@@ -214,7 +214,7 @@ def main(args):
                       validation_data=test_generator,
                       callbacks=callbacks,
                       epochs=args.epochs,
-                      use_multiprocessing=True,
+                      use_multiprocessing=False,
                       workers=8,
                       max_queue_size=128,
                       verbose=1)
