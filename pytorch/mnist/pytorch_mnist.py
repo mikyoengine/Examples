@@ -243,7 +243,7 @@ def test(model, test_loader):
     data, target = Variable(data), Variable(target)
     output = model(data)
     # sum up batch loss
-    replica_test_loss += F.nll_loss(output, target, size_average=False).item()
+    replica_test_loss += F.nll_loss(output, target, size_average=False, reduce=True).item()
     # get the index of the max log-probability
     pred = output.data.max(1, keepdim=True)[1]
     replica_test_accuracy += pred.eq(target.data.view_as(pred)).cpu().float().sum().item()
