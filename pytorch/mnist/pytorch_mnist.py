@@ -118,17 +118,17 @@ class Net(nn.Module):
   """A simple CNN in pytorch"""
   def __init__(self):
     super(Net, self).__init__()
-    self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-    self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+    self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
+    self.conv2 = nn.Conv2d(32, 32, kernel_size=5)
     self.conv2_drop = nn.Dropout2d()
-    self.fc1 = nn.Linear(320, 50)
-    self.fc2 = nn.Linear(50, 10)
+    self.fc1 = nn.Linear(512, 128)
+    self.fc2 = nn.Linear(128, 10)
 
 
   def forward(self, x):
     x = F.relu(F.max_pool2d(self.conv1(x), 2))
     x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-    x = x.view(-1, 320)
+    x = x.view(-1, 512)
     x = F.relu(self.fc1(x))
     x = F.dropout(x, training=self.training)
     x = self.fc2(x)
@@ -150,9 +150,8 @@ def build_model():
     model.cuda()
 
   # Scale learning rate by the number of GPUs.
-  optimizer = optim.SGD(model.parameters(),
-                        lr=eml.optimizer.scale_learning_rate(0.05),
-                        momentum=0.5)
+  optimizer = optim.Adadelta(model.parameters(), lr=eml.optimizer.scale_learning_rate(0.1))
+
   # Wrap optimizer with distributed optimizer.
   optimizer = eml.optimizer.distribute(optimizer)
 
@@ -182,57 +181,56 @@ def set_checkpoint_dir(test_replica_weights):
   return checkpoint_dir
 
 
-def train(model, optimizer, train_loader, start_epoch, epochs, checkpoint_dir, writer):
+def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoint_dir, writer):
   """Train model
 
   :param model: initialized model
   :param optimizer: initialized optimizer
   :param train_loader: loader for training data
-  :param start_epoch: if resuming training from checkpoint, which epoch to start from
-  :param epochs: number of epoch to train
+  :param current_epoch: number of current epoch
+  :param total_epochs: total number of epochs
   :param checkpoint_dir: save path for checkpoints
   :param writer: TensorBoardX Summary Writer
   """
-  batch_num = 0
-  for epoch in range(epochs):
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-      if torch.cuda.is_available():
-        data, target = data.cuda(), target.cuda()
-      data, target = Variable(data), Variable(target)
-      optimizer.zero_grad()
-      output = model(data)
-      loss = F.nll_loss(output, target)
-      loss.backward()
-      optimizer.step()
-      batch_num += 1
+  samples_seen = current_epoch * len(train_loader.dataset)
+  model.train()
+  for batch_idx, (data, target) in enumerate(train_loader):
+    if torch.cuda.is_available():
+      data, target = data.cuda(), target.cuda()
+    data, target = Variable(data), Variable(target)
+    optimizer.zero_grad()
+    output = model(data)
+    loss = F.nll_loss(output, target)
+    loss.backward()
+    optimizer.step()
+    samples_seen += len(data)
+    if batch_idx % 10 == 0:
+      print('Train Epoch: {}/{}\tLoss: {:.6f}'.format(current_epoch + 1, total_epochs, loss))
+      # Write an image to TensorBoardX
+      writer.add_image('images', data[0], samples_seen)
 
-      if batch_idx % 10 == 0:
-        print('Train Epoch: {}\tLoss: {:.6f}'.format((start_epoch + epoch), loss))
+      # Write loss, accuracy and histogram of weights to Tensorboard
+      writer.add_scalar('loss', loss, samples_seen)
+      pred = output.data.max(1, keepdim=True)[1]
+      acc = pred.eq(target.data.view_as(pred)).cpu().float().sum().item() / len(target)
+      writer.add_scalar('acc', acc, samples_seen)
 
-        # Write an image to TensorBoardX
-        writer.add_image('Images', data[0], batch_num)
-
-        # Write loss and histogram of weights to Tensorboard
-        writer.add_scalar('train_loss', loss, batch_num)
-        for name, param in model.named_parameters():
-          if param.requires_grad:
-            writer.add_histogram(name, param.clone().cpu().data.numpy().reshape(-1), batch_num)
-
-    state = {
-      'epoch': start_epoch + epoch,
-      'model_state': model.state_dict(),
-      'optimizer_state': optimizer.state_dict(),
-    }
-    torch.save(state, os.path.join(checkpoint_dir, 'checkpoint.pt'))
-    print('Model Saved at {}!\n'.format(checkpoint_dir))
+  state = {
+    'epoch': current_epoch,
+    'model_state': model.state_dict(),
+    'optimizer_state': optimizer.state_dict(),
+  }
+  torch.save(state, os.path.join(checkpoint_dir, 'checkpoint.pt'))
+  print('Model Saved to {}!\n'.format(checkpoint_dir))
 
 
-def test(model, test_loader):
+def test(model, test_loader, samples_seen, writer):
   """Evaluate model on test set
 
   :param model: trained model
   :param test_loader: loader for test data
+  :param samples_seen: number of training examples seen before running evaluation
+  :param writer: TensorBoardX Summary Writer
   """
   model.eval()
   replica_test_loss = 0.
@@ -243,17 +241,18 @@ def test(model, test_loader):
     data, target = Variable(data), Variable(target)
     output = model(data)
     # sum up batch loss
-    replica_test_loss += F.nll_loss(output, target, size_average=False, reduce=True).item()
+    replica_test_loss += F.nll_loss(output, target, size_average=False).item()
     # get the index of the max log-probability
     pred = output.data.max(1, keepdim=True)[1]
     replica_test_accuracy += pred.eq(target.data.view_as(pred)).cpu().float().sum().item()
 
   # Gather total test size, total accuracy, and total loss across all replicas
   total_test_size = eml.sync.replica_sum(np.float32(len(test_loader.dataset)))
-  total_test_loss = eml.sync.replica_sum(np.float32(replica_test_loss))
-  total_test_accuracy = eml.sync.replica_sum(np.float32(replica_test_accuracy))
-  print('Test set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(total_test_loss / total_test_size,
-                                                                     100. * total_test_accuracy / total_test_size))
+  total_test_loss = eml.sync.replica_sum(np.float32(replica_test_loss)) / total_test_size
+  total_test_accuracy = eml.sync.replica_sum(np.float32(replica_test_accuracy)) / total_test_size
+  print('Test set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(total_test_loss, 100. * total_test_accuracy))
+  writer.add_scalar('val_loss', total_test_loss, samples_seen)
+  writer.add_scalar('val_acc', total_test_accuracy, samples_seen)
 
 
 def main(args):
@@ -285,10 +284,14 @@ def main(args):
     optimizer.load_state_dict(checkpoint['optimizer_state'])
     start_epoch = checkpoint['epoch']
 
-  # Train model
-  train(model, optimizer, train_loader, start_epoch, args.epochs, checkpoint_dir, writer)
-  # Validate against test set
-  test(model, test_loader)
+  for epoch in range(args.epochs):
+    # Train model
+    current_epoch = start_epoch + epoch
+    train(model=model, optimizer=optimizer, train_loader=train_loader, current_epoch=current_epoch,
+          total_epochs=args.epochs, checkpoint_dir=checkpoint_dir, writer=writer)
+    # Validate against test set
+    samples_seen = (1 + current_epoch) * len(train_loader.dataset)
+    test(model=model, test_loader=test_loader, samples_seen=samples_seen, writer=writer)
 
   # Close TensorBoardX Summary Writer
   writer.close()

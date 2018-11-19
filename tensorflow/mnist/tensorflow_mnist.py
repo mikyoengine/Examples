@@ -15,10 +15,12 @@
 # ==============================================================================
 # !/usr/bin/env python
 import argparse
+import math
 import os
 import time
 
 import engineml.tensorflow as eml
+import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow.contrib import layers
@@ -55,42 +57,61 @@ def _parse_data(image_paths, labels):
   return images, labels
 
 
-def data_batch(df, batch_size, data_dir, sub_dir='train', epochs=None, num_threads=32):
+def data_batch(df_train, df_test, batch_size, data_dir, num_threads=32):
   """Reads, normalizes, shuffles, and batches data.
 
-  :param df: dataframe containing labels and img paths
+  :param df_train: dataframe containing train labels and img paths
+  :param df_test: dataframe containing test labels and img paths
   :param data_dir: data directory
-  :param sub_dir: subdirectory, train or test
   :param batch_size: int, batch size
-  :param epochs: how many times to loop over data, if None loops indefinitely
   :param num_threads: how many threads to run to batch data in parallel
-  :return: next element in dataset iterator and the initializer op
+  :return: next element in dataset iterator and the initializer op for train and test sets
   """
   # Convert lists of paths to tensors for tensorflow
   num_prefetch = num_threads * batch_size
-  image_list = [os.path.join(data_dir, sub_dir, fn) for fn in df['filenames'].values]
-  label_list = list(df['labels'].values)
-  num_sample = len(image_list)
-  images = tf.convert_to_tensor(image_list, dtype=tf.string)
-  labels = tf.convert_to_tensor(label_list, dtype=tf.int16)
+
+  image_list_train = [os.path.join(data_dir, 'train', fn) for fn in df_train['filenames'].values]
+  image_list_test = [os.path.join(data_dir, 'test', fn) for fn in df_test['filenames'].values]
+
+  label_list_train = list(df_train['labels'].values)
+  label_list_test = list(df_test['labels'].values)
+
+  images_train = tf.convert_to_tensor(image_list_train, dtype=tf.string)
+  images_test = tf.convert_to_tensor(image_list_test, dtype=tf.string)
+
+  labels_train = tf.convert_to_tensor(label_list_train, dtype=tf.int16)
+  labels_test = tf.convert_to_tensor(label_list_test, dtype=tf.int16)
+
   # Create dataset out of the 2 file lists:
-  data = tf.data.Dataset.from_tensor_slices((images, labels))
-  # Shuffle data
-  data = data.shuffle(buffer_size=num_sample)
-  # Parse images and label
-  data = data.map(_parse_data, num_parallel_calls=num_threads).prefetch(num_prefetch)
-  # Normalize
-  data = data.map(_normalize_data, num_parallel_calls=num_threads).prefetch(num_prefetch)
-  # Set batch and epochs
-  data = data.batch(batch_size)
-  data = data.repeat(epochs)
+  data_train = tf.data.Dataset.from_tensor_slices((images_train, labels_train))
+  data_test = tf.data.Dataset.from_tensor_slices((images_test, labels_test))
+
+  # Shuffle training data only
+  data_train = data_train.shuffle(buffer_size=len(image_list_train))
+
+  # Parse images and label and normalize images
+  data_train = data_train.map(
+    _parse_data, num_parallel_calls=num_threads).map(
+    _normalize_data, num_parallel_calls=num_threads).prefetch(num_prefetch)
+  data_test = data_test.map(
+    _parse_data, num_parallel_calls=num_threads).map(
+    _normalize_data, num_parallel_calls=num_threads).prefetch(num_prefetch)
+
+  # Set batch
+  data_train = data_train.batch(batch_size)
+  data_test = data_test.batch(batch_size)
+
   # Create iterator
-  iterator = data.make_one_shot_iterator()
-  # Next element Op
+  iterator = tf.data.Iterator.from_structure(data_train.output_types, data_train.output_shapes)
+
+  # Next element op
   next_element = iterator.get_next()
-  # Data set init. op
-  init_op = iterator.make_initializer(data)
-  return next_element, init_op
+
+  # Data set init_op
+  train_init_op = iterator.make_initializer(data_train)
+  test_init_op = iterator.make_initializer(data_test)
+
+  return next_element, train_init_op, test_init_op
 
 
 def conv_model(feature, target, mode):
@@ -114,9 +135,9 @@ def conv_model(feature, target, mode):
   # Densely connected layer with 1024 neurons.
   h_fc1 = layers.dropout(
     layers.fully_connected(
-      h_pool2_flat, 1024, activation_fn=tf.nn.relu),
+      h_pool2_flat, 512, activation_fn=tf.nn.relu),
     keep_prob=0.5,
-    is_training=mode == tf.contrib.learn.ModeKeys.TRAIN)
+    is_training=mode)
 
   # Compute logits (1 per class) and compute loss.
   logits = layers.fully_connected(h_fc1, 10, activation_fn=None)
@@ -124,10 +145,12 @@ def conv_model(feature, target, mode):
   acc, acc_op = tf.metrics.accuracy(tf.argmax(target, 1), tf.argmax(logits, 1))
 
   # Create summaries to monitor loss, accuracy, and example input images
-  tf.summary.scalar('loss', loss)
-  tf.summary.scalar('accuracy', acc)
-  tf.summary.image('images', feature, max_outputs=3)
-  return tf.argmax(logits, 1), loss, acc, acc_op, tf.summary.merge_all()
+  summaries = [
+    tf.summary.scalar('loss', loss),
+    tf.summary.scalar('acc', acc),
+    tf.summary.image('images', feature, max_outputs=1)
+  ]
+  return tf.argmax(target, 1), tf.argmax(logits, 1), loss, acc, acc_op, tf.summary.merge(summaries)
 
 
 def set_checkpoint_dir(test_replica_weights):
@@ -150,6 +173,76 @@ def set_checkpoint_dir(test_replica_weights):
   if not os.path.isdir(log_dir):
     os.mkdir(log_dir)
   return checkpoint_dir, log_dir
+
+
+def train(sess, epoch, batch_size, n_examples, writer, is_train, targets, summaries, loss, acc_op, train_op,
+          train_init_op):
+  """Train model
+
+  :param sess: tensorflow session
+  :param epoch: current epoch
+  :param batch_size: batch_size
+  :param n_examples: number of training examples
+  :param writer: tensorboard event file writer
+  :param is_train: tensor containing bool whether in train mode
+  :param targets: tensor containing labels
+  :param summaries: tensor of events to write to Tensorboard
+  :param loss: tensor containing loss
+  :param acc_op: operation that updates accuracy metrics
+  :param train_op: operation that updates model weights
+  :param train_init_op: operation that initializes train data generator
+  """
+  # Run init op for train data loader
+  sess.run(train_init_op, feed_dict={is_train: True})
+  samples_seen = epoch * n_examples
+  batches_per_epoch = int(math.ceil(n_examples / batch_size))
+  for batch_cnt in range(batches_per_epoch):
+    # Run a training step synchronously.
+    batch_targets, batch_summaries, batch_loss, _, _ = sess.run(
+      [targets, summaries, loss, acc_op, train_op], feed_dict={is_train: True}
+    )
+    samples_seen += len(batch_targets)
+    if batch_cnt % 10 == 0:
+      print('Train Epoch: {}/{}\tLoss: {:.6f}'.format(epoch + 1, args.epochs, batch_loss))
+      writer.add_summary(batch_summaries, samples_seen)
+
+
+def test(sess, samples_seen, batch_size, n_examples, writer, is_train, targets, preds, loss, test_init_op):
+  """Evaluate model on test set
+
+  :param sess: tensorflow session
+  :param samples_seen: train samples seen so far
+  :param batch_size: batch_size
+  :param n_examples: number of test examples
+  :param writer: tensorboard event file writer
+  :param is_train: tensor containing bool whether in train mode
+  :param targets: tensor containing labels
+  :param preds: tensor containing predicted labels
+  :param loss: tensor containing loss
+  :param test_init_op: operation that initializes test data generator
+  """
+  # Run init op for train data loader
+  sess.run(test_init_op, feed_dict={is_train: False})
+  batches_per_epoch = int(math.ceil(n_examples / batch_size))
+  replica_test_loss = 0.
+  replica_test_accuracy = 0.
+  for batch_cnt in range(batches_per_epoch):
+    # Run a training step synchronously.
+    batch_targets, batch_preds, batch_loss = sess.run(
+      [targets, preds, loss], feed_dict={is_train: False}
+    )
+    replica_test_loss += batch_loss * len(batch_targets)
+    replica_test_accuracy += sum(batch_targets == batch_preds)
+
+  # Gather total test size, total accuracy, and total loss across all replicas
+  total_test_size = eml.sync.replica_sum(np.float32(n_examples))
+  total_test_loss = eml.sync.replica_sum(np.float32(replica_test_loss)) / total_test_size
+  total_test_accuracy = eml.sync.replica_sum(np.float32(replica_test_accuracy)) / total_test_size
+  print('\nTest set: Average loss: {:.4f}, Accuracy: {:.2f}%\n'.format(total_test_loss, 100. * total_test_accuracy))
+  writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='val_loss', simple_value=total_test_loss)]),
+                     samples_seen)
+  writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='val_acc', simple_value=total_test_accuracy)]),
+                     samples_seen)
 
 
 def wait_for_files(num_retries=10, delay_secs=5):
@@ -177,35 +270,30 @@ def main(_):
   # Create dataframe with train paths and labels
   # If running integration tests, only use a subset of the data
   if args.run_on_subset:
-    df = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))[:5000]
+    df_train = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))[:5000]
+    df_test = pd.read_csv(os.path.join(args.data_dir, 'test_labels.csv'))[:500]
   else:
-    df = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))
-  # Partition the training data across replicas
-  df = eml.data.distribute(df)
+    df_train = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))
+    df_test = pd.read_csv(os.path.join(args.data_dir, 'test_labels.csv'))
+  # Partition the data across replicas
+  df_train = eml.data.distribute(df_train)
+  df_test = eml.data.distribute(df_test)
   # Reset indices to start from 0 for sliced data frame
-  df.reset_index(drop=True, inplace=True)
+  df_train.reset_index(drop=True, inplace=True)
+  df_test.reset_index(drop=True, inplace=True)
   # Create multi-threaded data loader
-  (image, label), init_op = data_batch(df, args.batch_size, args.data_dir, epochs=args.epochs)
+  (image, label), train_init_op, test_init_op = data_batch(df_train, df_test, args.batch_size, args.data_dir)
 
   # Build model...
-  predict, loss, acc, acc_op, summaries = conv_model(image, label, tf.contrib.learn.ModeKeys.TRAIN)
+  is_train = tf.placeholder(tf.bool)
+  targets, preds, loss, acc, acc_op, summaries = conv_model(image, label, is_train)
 
   # Scale the learning rate by the number of model replicas
   lr = eml.optimizer.scale_learning_rate(0.001)
   opt = tf.train.RMSPropOptimizer(lr)
-
   # Wrap your optimizer in the All Reduce Optimizer
   opt = eml.optimizer.distribute(opt)
-
-  global_step = tf.contrib.framework.get_or_create_global_step()
-  train_op = opt.minimize(loss, global_step=global_step)
-
-  hooks = [
-    # Synchronize all replica weights
-    eml.session.init_op_hook(),
-
-    tf.train.LoggingTensorHook(tensors={'step': global_step, 'loss': loss, 'accuracy': acc}, every_n_iter=50),
-  ]
+  train_op = opt.minimize(loss)
 
   # Enable NCCL communication between GPUs
   config = tf.ConfigProto()
@@ -214,21 +302,22 @@ def main(_):
 
   # Set the output directories for saving event files and checkpoints
   checkpoint_dir, log_dir = set_checkpoint_dir(args.test_replica_weights)
+  saver = tf.train.Saver(max_to_keep=2)
 
-  # The MonitoredTrainingSession takes care of session initialization,
-  # restoring from a checkpoint, saving to a checkpoint, and closing when done
-  # or an error occurs.
-  with tf.train.MonitoredTrainingSession(checkpoint_dir=checkpoint_dir, hooks=hooks, config=config) as mon_sess:
-    writer = tf.summary.FileWriter(log_dir, mon_sess.graph)
-    # Run init op for data loader
-    # mon_sess.run(init_op)
-    batch_cnt = 0
-    while not mon_sess.should_stop():
-      batch_cnt += 1
-      # Run a training step synchronously.
-      batch_summaries, _, _ = mon_sess.run([summaries, acc_op, train_op])
-      if batch_cnt % 10 == 0:
-        writer.add_summary(batch_summaries, batch_cnt)
+  with tf.Session(config=config) as sess:
+    # Initialize variables and syncrhonize all replica weights
+    sess.run(tf.global_variables_initializer())
+    sess.run(tf.local_variables_initializer())
+    sess.run(eml.session.init_op())
+    writer = tf.summary.FileWriter(log_dir, sess.graph)
+    for e in range(args.epochs):
+      train(sess=sess, epoch=e, batch_size=args.batch_size, n_examples=len(df_train), writer=writer, is_train=is_train,
+            targets=targets, summaries=summaries, loss=loss, acc_op=acc_op, train_op=train_op,
+            train_init_op=train_init_op)
+      samples_seen = (e + 1) * len(df_train)
+      test(sess=sess, samples_seen=samples_seen, batch_size=args.batch_size, n_examples=len(df_test), writer=writer,
+           is_train=is_train, targets=targets, preds=preds, loss=loss, test_init_op=test_init_op)
+      saver.save(sess, os.path.join(checkpoint_dir, 'checkpoint-%s' % (e + 1)))
 
   if args.test_replica_weights:
     # Sometimes replica 0 will reach the test_replica_weights phase before the other replicas have finished writing

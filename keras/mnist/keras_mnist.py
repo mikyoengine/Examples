@@ -86,10 +86,10 @@ def build_conv_model(input_shape=(28, 28, 1), num_classes=10):
   :return: CNN
   """
   model = Sequential()
-  model.add(Conv2D(32, kernel_size=(3, 3),
+  model.add(Conv2D(32, kernel_size=(5, 5),
                    activation='relu',
                    input_shape=input_shape))
-  model.add(Conv2D(64, (3, 3), activation='relu'))
+  model.add(Conv2D(64, (5, 5), activation='relu'))
   model.add(MaxPooling2D(pool_size=(2, 2)))
   model.add(Dropout(0.25))
   model.add(Flatten())
@@ -201,8 +201,8 @@ def main(args):
     # Synchronize all replica weights
     eml.callbacks.init_op_callback(),
 
-    keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=0, batch_size=args.batch_size, write_graph=True,
-                                write_grads=True, write_images=False, update_freq=500),
+    keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=0, batch_size=args.batch_size, write_graph=False,
+                                write_grads=True, write_images=False, update_freq=64 * 10),
 
     keras.callbacks.ModelCheckpoint(os.path.join(checkpoint_dir, 'checkpoint-{epoch:d}.hdf5'), monitor='val_loss',
                                     verbose=1, save_best_only=False, save_weights_only=False, mode='auto',
