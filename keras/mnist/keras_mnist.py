@@ -33,12 +33,13 @@ class DataGenerator(keras.utils.Sequence):
   """Generates data for Keras"""
   def __init__(self, df, data_dir, batch_size, target_size=(28, 28), num_classes=10, is_train=True):
     """Initialization"""
-    self.df = df
+    self.filenames = df['filenames'].values
+    self.labels = df['labels'].values
     self.data_dir = data_dir
     self.batch_size = batch_size
     self.target_size = target_size
     self.n_classes = num_classes
-    self.indices = np.arange(len(self.df))
+    self.indices = np.arange(len(self.filenames))
     if is_train:
       self.sub_dir = 'train'
       self.shuffle = True
@@ -50,7 +51,7 @@ class DataGenerator(keras.utils.Sequence):
 
   def __len__(self):
     """Denotes the number of batches per epoch"""
-    return int(np.floor(len(self.df) / self.batch_size))
+    return int(np.floor(len(self.filenames) / self.batch_size))
 
 
   def __getitem__(self, index):
@@ -58,8 +59,8 @@ class DataGenerator(keras.utils.Sequence):
     # Generate shuffled indices of the batch
     indices = self.indices[index * self.batch_size:(index + 1) * self.batch_size]
     # Pull list of randomly shuffled images
-    batch_x = [self.load_mnist_img(os.path.join(self.data_dir, self.sub_dir, self.df['filenames'][k])) for k in indices]
-    batch_y = [self.df['labels'][k] for k in indices]
+    batch_x = [self.load_mnist_img(os.path.join(self.data_dir, self.sub_dir, self.filenames[k])) for k in indices]
+    batch_y = [self.labels[k] for k in indices]
     return np.array(batch_x), keras.utils.to_categorical(np.array(batch_y), num_classes=self.n_classes)
 
 
