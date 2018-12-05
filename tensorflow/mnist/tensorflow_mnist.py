@@ -329,4 +329,5 @@ def main(_):
 
 if __name__ == '__main__':
   args = parser.parse_args()
+  eml.config.write_from_args(args)
   tf.app.run()
