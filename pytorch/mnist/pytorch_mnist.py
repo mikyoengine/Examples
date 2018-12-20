@@ -23,8 +23,6 @@ parser.add_argument('--data-dir', type=str, default='/engine/data', metavar='DAT
                     help='path to data directory')
 parser.add_argument('--epochs', type=int, default=2, metavar='N_EPOCHS',
                     help='number of epochs to train (default: 2)')
-parser.add_argument('--restore-dir', type=str, default=None, metavar='RESTORE_DIR',
-                    help='directory where saved checkpoint is stored')
 parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
 parser.add_argument('--run-on-subset', action='store_true',
@@ -256,6 +254,9 @@ def test(model, test_loader, samples_seen, writer):
 
 
 def main(args):
+  # Write configuration from arguments to eml-cli
+  eml.config.write_from_args(args)
+
   # Create Summary Writer for TensorBoardX.
   # log_dir needs to be set to eml.data.output_dir(). If training locally eml.data.output_dir() returns None.
   writer_dir = eml.data.output_dir() or './logs'
@@ -271,15 +272,14 @@ def main(args):
   checkpoint_dir = set_checkpoint_dir(args.test_replica_weights)
 
   # Check to see if training from saved checkpoint and if so load model
-  restore_dir = eml.data.input_dir() or args.restore_dir
   start_epoch = 0
-  if restore_dir and os.path.isfile(os.path.join(restore_dir, 'checkpoint.pt')):
+  if eml.data.input_dir() and os.path.isfile(os.path.join(eml.data.input_dir(), 'checkpoint.pt')):
     print(
       'Loading model and optimizer from checkpoint {}'.format(
-        os.path.join(restore_dir, 'checkpoint.pt')
+        os.path.join(eml.data.input_dir(), 'checkpoint.pt')
       )
     )
-    checkpoint = torch.load(os.path.join(restore_dir, 'checkpoint.pt'))
+    checkpoint = torch.load(os.path.join(eml.data.input_dir(), 'checkpoint.pt'))
     model.load_state_dict(checkpoint['model_state'])
     optimizer.load_state_dict(checkpoint['optimizer_state'])
     start_epoch = checkpoint['epoch']

@@ -267,6 +267,9 @@ def wait_for_files(num_retries=10, delay_secs=5):
 
 
 def main(_):
+  # Write configuration from arguments to eml-cli
+  eml.config.write_from_args(args)
+
   # Create dataframe with train paths and labels
   # If running integration tests, only use a subset of the data
   if args.run_on_subset:

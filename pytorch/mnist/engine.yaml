@@ -1,8 +1,8 @@
 # The engine yaml api version
 apiVersion: "1.1.0"
 
-# Which version of Python to use. Versions 2.7 and 3.5 are supported
-pythonVersion: "2.7"
+# Which version of Python to use. Versions 2.7 and 3.6 are supported
+pythonVersion: "3.6"
 
 # Which version of Pytorch to use. Version 0.4.0 is supported
 pytorchVersion: "0.4.0"

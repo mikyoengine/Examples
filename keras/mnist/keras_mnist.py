@@ -172,6 +172,9 @@ def wait_for_files(a, b, num_retries=10, delay_secs=5):
 
 
 def main(args):
+  # Write configuration from arguments to eml-cli
+  eml.config.write_from_args(args)
+
   # Set config
   config = tf.ConfigProto()
   config.gpu_options.allow_growth = True
