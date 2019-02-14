@@ -27,6 +27,8 @@ parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
 parser.add_argument('--run-on-subset', action='store_true',
                     help='run on a subset of the data')
+parser.add_argument('--restore-checkpoint-path', type=str, default='', metavar='RESTORE_CHKPT_PATH',
+                    help='path to checkpoint to load')
 
 
 class DataGenerator(Dataset):
@@ -42,11 +44,9 @@ class DataGenerator(Dataset):
     else:
       self.sub_dir = 'test'
 
-
   def __len__(self):
     """Denotes the number of batches per epoch"""
     return len(self.df)
-
 
   def __getitem__(self, index):
     """Generate one sample of data"""
@@ -54,7 +54,6 @@ class DataGenerator(Dataset):
     y = self.df['labels'][index]
     sample = {'x': x, 'y': y}
     return sample
-
 
   def load_mnist_img(self, fn):
     """ Load MNIST image
@@ -122,7 +121,6 @@ class Net(nn.Module):
     self.fc1 = nn.Linear(512, 128)
     self.fc2 = nn.Linear(128, 10)
 
-
   def forward(self, x):
     x = F.relu(F.max_pool2d(self.conv1(x), 2))
     x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
@@ -179,7 +177,7 @@ def set_checkpoint_dir(test_replica_weights):
   return checkpoint_dir
 
 
-def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoint_dir, writer):
+def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoint_dir, writer, test_replica_weights):
   """Train model
 
   :param model: initialized model
@@ -189,6 +187,7 @@ def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoin
   :param total_epochs: total number of epochs
   :param checkpoint_dir: save path for checkpoints
   :param writer: TensorBoardX Summary Writer
+  :param test_replica_weights: bool, whether testing replica weights as part of integration tests
   """
   samples_seen = current_epoch * len(train_loader.dataset)
   model.train()
@@ -218,7 +217,10 @@ def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoin
     'model_state': model.state_dict(),
     'optimizer_state': optimizer.state_dict(),
   }
-  torch.save(state, os.path.join(checkpoint_dir, 'checkpoint.pt'))
+  if test_replica_weights:
+    torch.save(state, os.path.join(checkpoint_dir, 'checkpoint'))
+  else:
+    eml.save(state, os.path.join(checkpoint_dir, 'checkpoint'))
   print('Model Saved to {}!\n'.format(checkpoint_dir))
 
 
@@ -271,26 +273,36 @@ def main(args):
   # Get checkpoint directory
   checkpoint_dir = set_checkpoint_dir(args.test_replica_weights)
 
-  # Check to see if training from saved checkpoint and if so load model
-  start_epoch = 0
-  if eml.data.input_dir() and os.path.isfile(os.path.join(eml.data.input_dir(), 'checkpoint.pt')):
-    print(
-      'Loading model and optimizer from checkpoint {}'.format(
-        os.path.join(eml.data.input_dir(), 'checkpoint.pt')
-      )
-    )
-    checkpoint = torch.load(os.path.join(eml.data.input_dir(), 'checkpoint.pt'))
-    model.load_state_dict(checkpoint['model_state'])
-    optimizer.load_state_dict(checkpoint['optimizer_state'])
-    start_epoch = checkpoint['epoch']
+  # Create a handler to automatically write a checkpoint when a job is preempted
+  def save_handler(m, o, checkpoint_path):
+    state = {
+      'model_state': m.state_dict(),
+      'optimizer_state': o.state_dict(),
+    }
+    eml.save(state, checkpoint_path)
+
+  # Set the preempted checkpoint handler
+  eml.preempted_handler(save_handler, model, optimizer, os.path.join(checkpoint_dir, 'preempted'))
+
+  # If there is a predefined checkpoint, check that it exists and load it
+  if args.restore_checkpoint_path:
+    if os.path.isfile(args.restore_checkpoint_path):
+      print('Loading model from checkpoint {}'.format(args.restore_checkpoint_path))
+      if torch.cuda.is_available():
+        checkpoint = torch.load(args.restore_checkpoint_path)
+      else:
+        checkpoint = torch.load(args.restore_checkpoint_path, map_location='cpu')
+      model.load_state_dict(checkpoint['model_state'])
+      optimizer.load_state_dict(checkpoint['optimizer_state'])
+    else:
+      raise IOError('No checkpoint found at %s' % args.restore_checkpoint_path)
 
   for epoch in range(args.epochs):
     # Train model
-    current_epoch = start_epoch + epoch
-    train(model=model, optimizer=optimizer, train_loader=train_loader, current_epoch=current_epoch,
-          total_epochs=args.epochs, checkpoint_dir=checkpoint_dir, writer=writer)
+    train(model=model, optimizer=optimizer, train_loader=train_loader, current_epoch=epoch, total_epochs=args.epochs,
+          checkpoint_dir=checkpoint_dir, writer=writer, test_replica_weights=args.test_replica_weights)
     # Validate against test set
-    samples_seen = (1 + current_epoch) * len(train_loader.dataset)
+    samples_seen = (1 + epoch) * len(train_loader.dataset)
     test(model=model, test_loader=test_loader, samples_seen=samples_seen, writer=writer)
 
   # Close TensorBoardX Summary Writer
@@ -298,8 +310,8 @@ def main(args):
 
   # Run weight replica tests if flag is set
   if args.test_replica_weights:
-    a = '/engine/outputs/0/checkpoint.pt'
-    b = '/engine/outputs/1/checkpoint.pt'
+    a = '/engine/outputs/0/checkpoint'
+    b = '/engine/outputs/1/checkpoint'
     assert eml.compare_checkpoints(a, b), 'Weights do not match across replicas!'
 
 

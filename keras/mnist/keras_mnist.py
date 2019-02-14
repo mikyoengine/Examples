@@ -27,6 +27,8 @@ parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
 parser.add_argument('--run-on-subset', action='store_true',
                     help='run on a subset of the data')
+parser.add_argument('--restore-checkpoint-path', type=str, default='', metavar='RESTORE_CHKPT_PATH',
+                    help='path to checkpoint to load')
 
 
 class DataGenerator(keras.utils.Sequence):
@@ -48,11 +50,9 @@ class DataGenerator(keras.utils.Sequence):
       self.shuffle = False
     self.on_epoch_end()
 
-
   def __len__(self):
     """Denotes the number of batches per epoch"""
     return int(np.floor(len(self.filenames) / self.batch_size))
-
 
   def __getitem__(self, index):
     """Generate one batch of data"""
@@ -63,7 +63,6 @@ class DataGenerator(keras.utils.Sequence):
     batch_y = [self.labels[k] for k in indices]
     return np.array(batch_x), keras.utils.to_categorical(np.array(batch_y), num_classes=self.n_classes)
 
-
   def load_mnist_img(self, fn):
     """ Load an MNIST image
 
@@ -71,7 +70,6 @@ class DataGenerator(keras.utils.Sequence):
     :return: grayscale img array
     """
     return np.asarray(Image.open(fn), dtype=np.float32).reshape(self.target_size[0], self.target_size[1], 1) / 255.
-
 
   def on_epoch_end(self):
     """Updates indices after each epoch"""
@@ -201,9 +199,20 @@ def main(args):
   # Set the output directory and filepath for saving event files and checkpoints
   checkpoint_dir, log_dir = get_output_dirs(args.test_replica_weights)
 
+  # If there is a predefined checkpoint, check that it exists and load it
+  if args.restore_checkpoint_path:
+    if os.path.isfile(args.restore_checkpoint_path):
+      print('Loading model from checkpoint {}'.format(args.restore_checkpoint_path))
+      model.load_weights(args.restore_checkpoint_path)
+    else:
+      raise IOError('No checkpoint found at %s' % args.restore_checkpoint_path)
+
   callbacks = [
     # Synchronize all replica weights
     eml.callbacks.init_op_callback(),
+
+    # Set the callback to automatically save a model checkpoint if the job is preempted
+    eml.callbacks.preempted_callback(os.path.join(checkpoint_dir, 'preempted.hdf5')),
 
     keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=0, batch_size=args.batch_size, write_graph=False,
                                 write_grads=True, write_images=False, update_freq=64 * 10),
@@ -234,6 +243,6 @@ def main(args):
     assert eml.compare_checkpoints(a, b), 'Weights do not match across replicas!'
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
   arguments = parser.parse_args()
   main(arguments)

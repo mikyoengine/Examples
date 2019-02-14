@@ -37,6 +37,8 @@ parser.add_argument('--test-replica-weights', action='store_true',
                     help='test that weights are identical across all GPU devices')
 parser.add_argument('--run-on-subset', action='store_true',
                     help='run on a subset of the data')
+parser.add_argument('--restore-checkpoint-path', type=str, default='', metavar='RESTORE_CHKPT_PATH',
+                    help='path to checkpoint to load')
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 tf.logging.set_verbosity(tf.logging.INFO)
@@ -305,13 +307,26 @@ def main(_):
 
   # Set the output directories for saving event files and checkpoints
   checkpoint_dir, log_dir = set_checkpoint_dir(args.test_replica_weights)
+
   saver = tf.train.Saver(max_to_keep=2)
+  # Wrap saver in eml wrapper if we aren't running the replica weight test.
+  if not args.test_replica_weights:
+    saver = eml.saver(saver)
 
   with tf.Session(config=config) as sess:
+    # Set a handler to automatically save a model checkpoint if the job is preempted
+    eml.preempted_handler(saver.save, sess, os.path.join(checkpoint_dir, 'preempted'))
     # Initialize variables and syncrhonize all replica weights
     sess.run(tf.global_variables_initializer())
     sess.run(tf.local_variables_initializer())
     sess.run(eml.session.init_op())
+    # If there is a predefined checkpoint, check that it exists and load it
+    if args.restore_checkpoint_path:
+      if os.path.isfile('%s.meta' % args.restore_checkpoint_path):
+        print('Loading model from checkpoint {}'.format(args.restore_checkpoint_path))
+        saver.restore(sess, args.restore_checkpoint_path)
+      else:
+        raise IOError('No checkpoint found at %s.meta' % args.restore_checkpoint_path)
     writer = tf.summary.FileWriter(log_dir, sess.graph)
     for e in range(args.epochs):
       train(sess=sess, epoch=e, batch_size=args.batch_size, n_examples=len(df_train), writer=writer, is_train=is_train,
