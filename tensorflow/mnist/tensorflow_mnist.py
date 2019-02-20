@@ -329,10 +329,12 @@ def main(_):
         raise IOError('No checkpoint found at %s.meta' % args.restore_checkpoint_path)
     writer = tf.summary.FileWriter(log_dir, sess.graph)
     for e in range(args.epochs):
+      eml.annotate(title='Train', comment='Start training', tags=[str(e)])
       train(sess=sess, epoch=e, batch_size=args.batch_size, n_examples=len(df_train), writer=writer, is_train=is_train,
             targets=targets, summaries=summaries, loss=loss, acc_op=acc_op, train_op=train_op,
             train_init_op=train_init_op)
       samples_seen = (e + 1) * len(df_train)
+      eml.annotate(title='Validation', comment='Start validation', tags=[str(e)])
       test(sess=sess, samples_seen=samples_seen, batch_size=args.batch_size, n_examples=len(df_test), writer=writer,
            is_train=is_train, targets=targets, preds=preds, loss=loss, test_init_op=test_init_op)
       saver.save(sess, os.path.join(checkpoint_dir, 'checkpoint-%s' % (e + 1)))

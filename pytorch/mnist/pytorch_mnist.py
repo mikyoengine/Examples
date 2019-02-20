@@ -299,10 +299,12 @@ def main(args):
 
   for epoch in range(args.epochs):
     # Train model
+    eml.annotate(title='Train', comment='Start training', tags=[str(epoch)])
     train(model=model, optimizer=optimizer, train_loader=train_loader, current_epoch=epoch, total_epochs=args.epochs,
           checkpoint_dir=checkpoint_dir, writer=writer, test_replica_weights=args.test_replica_weights)
     # Validate against test set
     samples_seen = (1 + epoch) * len(train_loader.dataset)
+    eml.annotate(title='Validation', comment='Start validation', tags=[str(epoch)])
     test(model=model, test_loader=test_loader, samples_seen=samples_seen, writer=writer)
 
   # Close TensorBoardX Summary Writer

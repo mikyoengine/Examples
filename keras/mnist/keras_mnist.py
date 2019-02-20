@@ -223,6 +223,7 @@ def main(args):
   ]
 
   # Train model
+  eml.annotate(title='Train', comment='Start training', tags=[str(args.epochs)])
   model.fit_generator(generator=train_generator,
                       validation_data=test_generator,
                       callbacks=callbacks,
@@ -231,6 +232,7 @@ def main(args):
                       workers=8,
                       max_queue_size=128,
                       verbose=1)
+  eml.annotate(title='Train', comment='Finished training', tags=[str(args.epochs)])
 
   # Run weight replica tests if flag is set
   if args.test_replica_weights and eml.replica_id() == 0:
