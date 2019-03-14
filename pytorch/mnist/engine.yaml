@@ -17,7 +17,7 @@ build: engine_build.sh
 enableHighCostInstances: false
 
 # S3 bucket where the training data is stored.
-dataBucket: datasets.engineml.com
+dataBucket: datasets.us-east-1.engineml.com
 
 # Subdirectory of the S3 bucket containing tfrecords
 dataBucketSubdirectory: /mnist

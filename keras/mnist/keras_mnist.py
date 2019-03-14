@@ -35,8 +35,8 @@ class DataGenerator(keras.utils.Sequence):
   """Generates data for Keras"""
   def __init__(self, df, data_dir, batch_size, target_size=(28, 28), num_classes=10, is_train=True):
     """Initialization"""
-    self.filenames = df['filenames'].values
-    self.labels = df['labels'].values
+    self.filenames = [sample[0] for sample in df]
+    self.labels = [sample[1] for sample in df]
     self.data_dir = data_dir
     self.batch_size = batch_size
     self.target_size = target_size
@@ -114,11 +114,11 @@ def get_data_generators(data_dir, batch_size, run_on_subset):
     df_train = pd.read_csv(os.path.join(data_dir, 'train_labels.csv'))
     df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
 
-  # Partition your training data across replicas
-  df_train = eml.data.distribute(df_train)
-
-  # Reset indices to start from 0 for sliced data frame
-  df_train.reset_index(drop=True, inplace=True)
+  # Partition the data across replicas
+  df_train = eml.data.distribute(df_train.values, prefetch=True,
+                                 prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'train', x[0]))
+  df_test = eml.data.distribute(df_test.values, prefetch=True,
+                                prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'test', x[0]))
 
   train_generator = DataGenerator(df_train, data_dir, batch_size)
   test_generator = DataGenerator(df_test, data_dir, batch_size, is_train=False)

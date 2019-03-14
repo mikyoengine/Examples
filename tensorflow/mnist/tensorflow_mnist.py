@@ -62,8 +62,8 @@ def _parse_data(image_paths, labels):
 def data_batch(df_train, df_test, batch_size, data_dir, num_threads=32):
   """Reads, normalizes, shuffles, and batches data.
 
-  :param df_train: dataframe containing train labels and img paths
-  :param df_test: dataframe containing test labels and img paths
+  :param df_train: numpy array containing train labels and img paths
+  :param df_test: numpy array containing test labels and img paths
   :param data_dir: data directory
   :param batch_size: int, batch size
   :param num_threads: how many threads to run to batch data in parallel
@@ -72,11 +72,11 @@ def data_batch(df_train, df_test, batch_size, data_dir, num_threads=32):
   # Convert lists of paths to tensors for tensorflow
   num_prefetch = num_threads * batch_size
 
-  image_list_train = [os.path.join(data_dir, 'train', fn) for fn in df_train['filenames'].values]
-  image_list_test = [os.path.join(data_dir, 'test', fn) for fn in df_test['filenames'].values]
+  image_list_train = [os.path.join(data_dir, 'train', sample[0]) for sample in df_train]
+  image_list_test = [os.path.join(data_dir, 'test', sample[0]) for sample in df_test]
 
-  label_list_train = list(df_train['labels'].values)
-  label_list_test = list(df_test['labels'].values)
+  label_list_train = [sample[1] for sample in df_train]
+  label_list_test = [sample[1] for sample in df_test]
 
   images_train = tf.convert_to_tensor(image_list_train, dtype=tf.string)
   images_test = tf.convert_to_tensor(image_list_test, dtype=tf.string)
@@ -281,11 +281,10 @@ def main(_):
     df_train = pd.read_csv(os.path.join(args.data_dir, 'train_labels.csv'))
     df_test = pd.read_csv(os.path.join(args.data_dir, 'test_labels.csv'))
   # Partition the data across replicas
-  df_train = eml.data.distribute(df_train)
-  df_test = eml.data.distribute(df_test)
-  # Reset indices to start from 0 for sliced data frame
-  df_train.reset_index(drop=True, inplace=True)
-  df_test.reset_index(drop=True, inplace=True)
+  df_train = eml.data.distribute(df_train.values, prefetch=True,
+                                 prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'train', x[0]))
+  df_test = eml.data.distribute(df_test.values, prefetch=True,
+                                prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'test', x[0]))
   # Create multi-threaded data loader
   (image, label), train_init_op, test_init_op = data_batch(df_train, df_test, args.batch_size, args.data_dir)
 

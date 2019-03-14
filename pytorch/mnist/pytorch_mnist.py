@@ -50,8 +50,8 @@ class DataGenerator(Dataset):
 
   def __getitem__(self, index):
     """Generate one sample of data"""
-    x = self.load_mnist_img(os.path.join(self.data_dir, self.sub_dir, self.df['filenames'][index]))
-    y = self.df['labels'][index]
+    x = self.load_mnist_img(os.path.join(self.data_dir, self.sub_dir, self.df[index][0]))
+    y = self.df[index][1]
     sample = {'x': x, 'y': y}
     return sample
 
@@ -88,11 +88,10 @@ def create_data_loaders(data_dir, batch_size, run_on_subset):
     df_test = pd.read_csv(os.path.join(data_dir, 'test_labels.csv'))
 
   # Partition your training and test data across replicas
-  df_train = eml.data.distribute(df_train)
-  df_test = eml.data.distribute(df_test)
-  # Reset indices to start from 0 for sliced data frame
-  df_train.reset_index(drop=True, inplace=True)
-  df_test.reset_index(drop=True, inplace=True)
+  df_train = eml.data.distribute(df_train.values, prefetch=True,
+                                 prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'train', x[0]))
+  df_test = eml.data.distribute(df_test.values, prefetch=True,
+                                prefetch_func=lambda x: os.path.join(eml.data.data_dir(), 'test', x[0]))
 
   train_generator = DataGenerator(df_train, data_dir)
   test_generator = DataGenerator(df_test, data_dir, is_train=False)

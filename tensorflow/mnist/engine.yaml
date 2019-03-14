@@ -18,7 +18,7 @@ enableHighCostInstances: false
 
 # S3 bucket where the training data is stored.
 # If your data is hosted with Engine ML, Please contact us for the s3 bucket name
-dataBucket: datasets.engineml.com
+dataBucket: datasets.us-east-1.engineml.com
 
 # Subdirectory of the S3 bucket containing tfrecords
 dataBucketSubdirectory: /mnist
