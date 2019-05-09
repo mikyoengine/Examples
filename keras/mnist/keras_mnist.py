@@ -135,7 +135,7 @@ def get_output_dirs(test_replica_weights):
   # Set the output directory for saving event files and checkpoints
   # `eml.data.output_dir()` returns `None` when running locally
   checkpoint_dir = eml.data.output_dir() or './checkpoints'
-  log_dir = eml.data.output_dir() or './logs'
+  log_dir = os.path.join(eml.data.output_dir(), 'logs') or './logs'
   # If replica weight test, set manually.
   # THIS IS ONLY FOR TESTING! THERE IS NO REASON TO WRITE MULTIPLE CHECKPOINTS FOR EACH REPLICA.
   # MODEL WEIGHTS ARE UPDATED USING AVG. GRADIENTS ACROSS ALL REPLICAS; THEREFORE EVERY CHECKPOINT WOULD BE IDENTICAL.
