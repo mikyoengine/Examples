@@ -260,7 +260,7 @@ def main(args):
 
   # Create Summary Writer for TensorBoardX.
   # log_dir needs to be set to eml.data.output_dir(). If training locally eml.data.output_dir() returns None.
-  writer_dir = os.path.join(eml.data.output_dir(), 'logs') or './logs'
+  writer_dir = './logs' if eml.data.output_dir() is None else os.path.join(eml.data.output_dir(), 'logs')
   writer = SummaryWriter(log_dir=writer_dir)
 
   # Download data if necessary and create train and test data loaders
