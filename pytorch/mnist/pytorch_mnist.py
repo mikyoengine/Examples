@@ -4,6 +4,7 @@ import argparse
 import os
 
 import engineml.torch as eml
+import wandb
 import numpy as np
 import pandas as pd
 import torch.nn as nn
@@ -14,6 +15,8 @@ from PIL import Image
 from tensorboardX import SummaryWriter
 from torch.autograd import Variable
 from torch.utils.data import Dataset
+
+wandb.init(project="w-and-b-example")
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
@@ -189,6 +192,7 @@ def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoin
   :param test_replica_weights: bool, whether testing replica weights as part of integration tests
   """
   samples_seen = current_epoch * len(train_loader.dataset)
+  wandb.watch(model)
   model.train()
   for batch_idx, (data, target) in enumerate(train_loader):
     if torch.cuda.is_available():
@@ -211,6 +215,9 @@ def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoin
       acc = pred.eq(target.data.view_as(pred)).cpu().float().sum().item() / len(target)
       writer.add_scalar('acc', acc, samples_seen)
 
+      # Write to wandb
+      wandb.log({"loss": loss, "acc": acc})
+
   state = {
     'epoch': current_epoch,
     'model_state': model.state_dict(),
@@ -220,6 +227,7 @@ def train(model, optimizer, train_loader, current_epoch, total_epochs, checkpoin
     torch.save(state, os.path.join(checkpoint_dir, 'checkpoint'))
   else:
     eml.save(state, os.path.join(checkpoint_dir, 'checkpoint'))
+    wandb.save(model.state_dict(), wandb.run.dir)
   print('Model Saved to {}!\n'.format(checkpoint_dir))
 
 
