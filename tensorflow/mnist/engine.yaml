@@ -8,7 +8,7 @@ pythonVersion: "3.6"
 tensorFlowVersion: "1.8.0"
 
 # How many GPUs to run on (It is most efficient to use a multiple of 8)
-numGPUs: 1
+numGPUs: 8
 
 preemptible: true
 
